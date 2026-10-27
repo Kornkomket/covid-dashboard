@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>COVID-19 Dashboard ข้อมูลผู้ป่วยประเทศไทย</title>
+    
+    <!-- นำเข้าไลบรารีที่จำเป็น -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script> <!-- สำหรับ Heatmap/Density -->
+
+    <style>
+        :root {
+            --primary-color: #2c3e50;
+            --bg-color: #f4f7f6;
+            --card-bg: #ffffff;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            margin: 0;
+            padding: 20px;
+            color: #333;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: var(--primary-color);
+            color: white;
+            padding: 15px 30px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .profile-container {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .profile-pic {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            border: 2px solid white;
+            object-fit: cover;
+        }
+        .filters {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            background: var(--card-bg);
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        select, input {
+            padding: 8px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+        }
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .card {
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .full-width {
+            grid-column: span 2;
+        }
+        #map {
+            height: 400px;
+            border-radius: 10px;
+            z-index: 1;
+        }
+        canvas {
+            max-height: 300px;
+        }
+        .stat-box {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            flex: 1;
+            background: #fff;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .stat-number {
+            font-size: 2em;
+            font-weight: bold;
+            color: #e74c3c;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ส่วนหัวและรูปโปรไฟล์ -->
+    <div class="header">
+        <div>
+            <h1>📊 COVID-19 Thailand Dashboard</h1>
+            <p>วิเคราะห์และนำเสนอข้อมูลการติดเชื้อโควิดในประเทศไทย</p>
+        </div>
+        <div class="profile-container">
+            <div>
+                <strong>จัดทำโดย:</strong><br>
+                <span>[ใส่ชื่อ-นามสกุลของคุณ]</span>
+            </div>
+            <!-- แก้ไขลิงก์รูปภาพด้านล่างนี้ให้เป็น URL จาก GitHub ของคุณ -->
+            <img src="YOUR_GITHUB_IMAGE_URL_HERE.jpg" alt="Profile" class="profile-pic" onerror="this.src='https://via.placeholder.com/60?text=Profile'">
+        </div>
+    </div>
+
+    <!-- สถิติเบื้องต้น -->
+    <div class="stat-box">
+        <div class="stat-card">
+            <h3>ผู้ติดเชื้อทั้งหมด</h3>
+            <div id="total-cases" class="stat-number">กำลังโหลด...</div>
+        </div>
+        <div class="stat-card">
+            <h3>จังหวัดที่พบมากที่สุด</h3>
+            <div id="top-province" class="stat-number" style="color:#3498db;">กำลังโหลด...</div>
+        </div>
+    </div>
+
+    <!-- ตัวกรองข้อมูล (Filters) -->
+    <div class="filters">
+        <label>กรองตามจังหวัด:</label>
+        <select id="province-filter">
+            <option value="all">ทุกจังหวัด</option>
+        </select>
+        
+        <label>กรองตามเพศ:</label>
+        <select id="sex-filter">
+            <option value="all">ทั้งหมด</option>
+            <option value="ชาย">ชาย</option>
+            <option value="หญิง">หญิง</option>
+        </select>
+    </div>
+
+    <!-- โครงสร้างกราฟและแผนที่ -->
+    <div class="dashboard-grid">
+        <!-- แผนที่ -->
+        <div class="card full-width">
+            <h3>🗺️ แผนที่การกระจายตัวของผู้ป่วย (Spot map & Choropleth)</h3>
+            <p style="font-size:0.8em; color:gray;">* จุดสีแดงแสดงความหนาแน่นของผู้ป่วยในแต่ละพื้นที่ (การจำลองพิกัดตามจังหวัด)</p>
+            <div id="map"></div>
+        </div>
+
+        <!-- Epidemic Curve -->
+        <div class="card full-width">
+            <h3>📈 Epidemic Curve (กราฟแสดงการระบาดตามช่วงเวลา)</h3>
+            <canvas id="epiCurveChart"></canvas>
+        </div>
+
+        <!-- กราฟเพศ -->
+        <div class="card">
+            <h3>👥 สัดส่วนผู้ป่วยแยกตามเพศ</h3>
+            <canvas id="genderChart"></canvas>
+        </div>
+
+        <!-- กราฟช่วงอายุ -->
+        <div class="card">
+            <h3>🎂 จำนวนผู้ป่วยแยกตามช่วงอายุ</h3>
+            <canvas id="ageChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        // กำหนดตัวแปรสำหรับเก็บข้อมูลและอินสแตนซ์ของกราฟ
+        let rawData = [];
+        let chartInstances = {};
+        let map;
+        let markersLayer;
+
+        // พิกัดกลางของจังหวัดโดยประมาณ (เนื่องจากใน CSV ไม่มีพิกัด Lat/Long ให้)
+        const provinceCoords = {
+            "กรุงเทพมหานคร": [13.7563, 100.5018], "เชียงใหม่": [18.7883, 98.9853],
+            "ชลบุรี": [13.3611, 100.9847], "ภูเก็ต": [7.8906, 98.3981],
+            "สมุทรปราการ": [13.5991, 100.5968], "นนทบุรี": [13.8591, 100.5217],
+            "ปทุมธานี": [14.0208, 100.5250], "นครราชสีมา": [14.9799, 102.0978]
+            // เพิ่มเติมพิกัดได้หากต้องการให้แผนที่แม่นยำขึ้น
+        };
+
+        // 1. ดึงข้อมูลจากไฟล์ CSV ด้วย PapaParse
+        Papa.parse("final69_covid65.csv", {
+            download: true,
+            header: true,
+            skipEmptyLines: true,
+            complete: function(results) {
+                rawData = results.data;
+                initDashboard();
+            },
+            error: function(err) {
+                alert("ไม่สามารถโหลดไฟล์ข้อมูลได้ โปรดตรวจสอบชื่อไฟล์ final69_covid65.csv");
+            }
+        });
+
+        function initDashboard() {
+            populateFilters();
+            setupEventListeners();
+            updateDashboard();
+        }
+
+        // 2. สร้างรายการตัวกรองจังหวัด
+        function populateFilters() {
+            let provinces = [...new Set(rawData.map(item => item.province_of_onset))].filter(p => p);
+            provinces.sort();
+            let provinceSelect = document.getElementById("province-filter");
+            provinces.forEach(prov => {
+                let option = document.createElement("option");
+                option.value = prov;
+                option.textContent = prov;
+                provinceSelect.appendChild(option);
+            });
+        }
+
+        // 3. กำหนด Event เมื่อมีการเปลี่ยน Filter
+        function setupEventListeners() {
+            document.getElementById("province-filter").addEventListener("change", updateDashboard);
+            document.getElementById("sex-filter").addEventListener("change", updateDashboard);
+        }
+
+        // 4. อัปเดตข้อมูลบน Dashboard เมื่อมีการกรองข้อมูล
+        function updateDashboard() {
+            let selectedProvince = document.getElementById("province-filter").value;
+            let selectedSex = document.getElementById("sex-filter").value;
+
+            // กรองข้อมูล
+            let filteredData = rawData.filter(item => {
+                let matchProvince = selectedProvince === "all" || item.province_of_onset === selectedProvince;
+                let matchSex = selectedSex === "all" || item.sex === selectedSex;
+                return matchProvince && matchSex;
+            });
+
+            // อัปเดตตัวเลขสถิติ
+            document.getElementById("total-cases").textContent = filteredData.length.toLocaleString();
+            
+            // หาจังหวัดที่พบมากที่สุด
+            let provCount = {};
+            filteredData.forEach(d => {
+                if(d.province_of_onset) provCount[d.province_of_onset] = (provCount[d.province_of_onset] || 0) + 1;
+            });
+            let topProv = Object.keys(provCount).reduce((a, b) => provCount[a] > provCount[b] ? a : b, "-");
+            document.getElementById("top-province").textContent = topProv;
+
+            drawGenderChart(filteredData);
+            drawAgeChart(filteredData);
+            drawEpiCurve(filteredData);
+            drawMap(filteredData, provCount);
+        }
+
+        // 5. วาดกราฟเพศ (Pie Chart)
+        function drawGenderChart(data) {
+            let maleCount = data.filter(d => d.sex === 'ชาย').length;
+            let femaleCount = data.filter(d => d.sex === 'หญิง').length;
+            let unknownCount = data.length - (maleCount + femaleCount);
+
+            if (chartInstances.gender) chartInstances.gender.destroy();
+            
+            let ctx = document.getElementById('genderChart').getContext('2d');
+            chartInstances.gender = new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: ['ชาย', 'หญิง', 'ไม่ระบุ'],
+                    datasets: [{
+                        data: [maleCount, femaleCount, unknownCount],
+                        backgroundColor: ['#3498db', '#e74c3c', '#bdc3c7']
+                    }]
+                }
+            });
+        }
+
+        // 6. วาดกราฟช่วงอายุ (Bar Chart)
+        function drawAgeChart(data) {
+            let ageGroups = {"0-18":0, "19-35":0, "36-50":0, "51-60":0, "60+":0};
+            data.forEach(d => {
+                let age = parseInt(d.age);
+                if (!isNaN(age)) {
+                    if (age <= 18) ageGroups["0-18"]++;
+                    else if (age <= 35) ageGroups["19-35"]++;
+                    else if (age <= 50) ageGroups["36-50"]++;
+                    else if (age <= 60) ageGroups["51-60"]++;
+                    else ageGroups["60+"]++;
+                }
+            });
+
+            if (chartInstances.age) chartInstances.age.destroy();
+
+            let ctx = document.getElementById('ageChart').getContext('2d');
+            chartInstances.age = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: Object.keys(ageGroups),
+                    datasets: [{
+                        label: 'จำนวนผู้ป่วย (คน)',
+                        data: Object.values(ageGroups),
+                        backgroundColor: '#2ecc71'
+                    }]
+                }
+            });
+        }
+
+        // 7. วาดกราฟ Epidemic Curve (Line Chart)
+        function drawEpiCurve(data) {
+            let dateCounts = {};
+            data.forEach(d => {
+                let date = d.announce_date; // ใช้วันที่ประกาศ
+                if (date) {
+                    dateCounts[date] = (dateCounts[date] || 0) + 1;
+                }
+            });
+
+            // เรียงวันที่
+            let sortedDates = Object.keys(dateCounts).sort();
+            let counts = sortedDates.map(date => dateCounts[date]);
+
+            if (chartInstances.epi) chartInstances.epi.destroy();
+
+            let ctx = document.getElementById('epiCurveChart').getContext('2d');
+            chartInstances.epi = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: sortedDates,
+                    datasets: [{
+                        label: 'ผู้ป่วยรายใหม่',
+                        data: counts,
+                        borderColor: '#e67e22',
+                        backgroundColor: 'rgba(230, 126, 34, 0.2)',
+                        fill: true,
+                        tension: 0.3
+                    }]
+                }
+            });
+        }
+
+        // 8. วาดแผนที่ Leaflet (Heatmap / Bubble Map เบื้องต้น)
+        function drawMap(data, provCount) {
+            // สร้าง Map ครั้งแรกหากยังไม่มี
+            if (!map) {
+                map = L.map('map').setView([13.7563, 100.5018], 5);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© OpenStreetMap contributors'
+                }).addTo(map);
+                markersLayer = L.layerGroup().addTo(map);
+            } else {
+                markersLayer.clearLayers();
+            }
+
+            // เนื่องจากเราไม่มีพิกัดระดับอำเภอทั้งหมด เราจะสร้างวงกลม (Circle) บริเวณพิกัดจังหวัดตามความหนาแน่นของผู้ติดเชื้อ
+            Object.keys(provCount).forEach(prov => {
+                let coords = provinceCoords[prov] || [13.7563 + (Math.random()-0.5)*10, 100.5018 + (Math.random()-0.5)*10]; // สุ่มพิกัดให้จังหวัดที่ไม่ได้ระบุไว้เพื่อการแสดงผลเบื้องต้น
+                let radius = Math.min(Math.max(provCount[prov] * 10, 5000), 50000); // คำนวณขนาดวงกลม
+
+                L.circle(coords, {
+                    color: 'red',
+                    fillColor: '#f03',
+                    fillOpacity: 0.5,
+                    radius: radius
+                }).bindPopup(`<b>${prov}</b><br>จำนวนผู้ติดเชื้อ: ${provCount[prov]} คน`).addTo(markersLayer);
+            });
+        }
+    </script>
+</body>
+</html>
